@@ -1,1 +1,1 @@
-# conditional-deformable-detr
+customize Detr architechture
