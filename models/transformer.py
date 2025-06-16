@@ -14,7 +14,10 @@ from typing import Optional, List
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
-from .attention import MultiheadAttention
+from models.attention import MultiheadAttention
+import torch.nn as nn
+from models.ops.modules import MSDeformAttn  # đảm bảo module đã build
+from util.misc import NestedTensor
 
 class MLP(nn.Module):
     """ Very simple multi-layer perceptron (also called FFN)"""
@@ -29,6 +32,38 @@ class MLP(nn.Module):
         for i, layer in enumerate(self.layers):
             x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
         return x
+
+def get_valid_ratio(mask):
+    _, H, W = mask.shape
+    valid_H = torch.sum(~mask[:, :, 0], 1)
+    valid_W = torch.sum(~mask[:, 0, :], 1)
+    return torch.stack([valid_W.float() / W, valid_H.float() / H], -1)
+
+
+def prepare_encoder_input(srcs, masks, pos_embeds, level_embed):
+    # Flatten và concatenate tất cả levels
+    src_flatten, mask_flatten, pos_flatten, spatial_shapes = [], [], [], []
+    for lvl, (src, mask, pos_embed) in enumerate(zip(srcs, masks, pos_embeds)):
+        bs, c, h, w = src.shape
+        spatial_shapes.append((h, w))
+
+        src = src.flatten(2).transpose(1, 2)
+        mask = mask.flatten(1)
+        pos_embed = pos_embed.flatten(2).transpose(1, 2)
+        pos_embed = pos_embed + level_embed[lvl].view(1, 1, -1)
+
+        src_flatten.append(src)
+        mask_flatten.append(mask)
+        pos_flatten.append(pos_embed)
+
+    src_flatten = torch.cat(src_flatten, 1)  # (bs, sum(HW), c)
+    mask_flatten = torch.cat(mask_flatten, 1)
+    pos_flatten = torch.cat(pos_flatten, 1)
+    spatial_shapes = torch.as_tensor(spatial_shapes, dtype=torch.long, device=src.device)
+    level_start_index = torch.cat((spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
+
+    return src_flatten, mask_flatten, pos_flatten, spatial_shapes, level_start_index
+
 
 def gen_sineembed_for_position(pos_tensor):
     # n_query, bs, _ = pos_tensor.size()
@@ -46,25 +81,26 @@ def gen_sineembed_for_position(pos_tensor):
     return pos
 
 class Transformer(nn.Module):
-
-    def __init__(self, d_model=512, nhead=8, num_queries=300, num_encoder_layers=6,
-                 num_decoder_layers=6, dim_feedforward=2048, dropout=0.1,
-                 activation="relu", normalize_before=False,
-                 return_intermediate_dec=False):
+    def __init__(self, d_model=256, nhead=8, num_encoder_layers=6,
+                 num_decoder_layers=6, dim_feedforward=1024, dropout=0.1,
+                 activation="relu", normalize_before=False, return_intermediate_dec=False,num_feature_levels = 4):
         super().__init__()
 
-        encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
-                                                dropout, activation, normalize_before)
-        encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
-        self.encoder = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
+        self.num_feature_levels = num_feature_levels
+
+        encoder_layer = DeformableTransformerEncoderLayer(
+            d_model=d_model, d_ffn=dim_feedforward, dropout=dropout,
+            activation=activation, n_levels=self.num_feature_levels, n_heads=nhead, n_points=4)
+
+        self.encoder = DeformableTransformerEncoder(encoder_layer, num_encoder_layers)
 
         decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
                                                 dropout, activation, normalize_before)
         decoder_norm = nn.LayerNorm(d_model)
         self.decoder = TransformerDecoder(decoder_layer, num_decoder_layers, decoder_norm,
-                                          return_intermediate=return_intermediate_dec,
-                                          d_model=d_model)
+                                          return_intermediate=return_intermediate_dec, d_model=d_model)
 
+        self.level_embed = nn.Parameter(torch.Tensor(self.num_feature_levels, d_model))
         self._reset_parameters()
 
         self.d_model = d_model
@@ -75,20 +111,115 @@ class Transformer(nn.Module):
         for p in self.parameters():
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
+        nn.init.normal_(self.level_embed)
+        for m in self.modules():
+            if isinstance(m, MSDeformAttn):
+                m._reset_parameters()
 
-    def forward(self, src, mask, query_embed, pos_embed):
-        # flatten NxCxHxW to HWxNxC
-        bs, c, h, w = src.shape
-        src = src.flatten(2).permute(2, 0, 1)
-        pos_embed = pos_embed.flatten(2).permute(2, 0, 1)
+    def forward(self, srcs, masks, pos_embeds, query_embed):
+        bs = srcs[0].shape[0]
+
+        src_flatten, mask_flatten, pos_flatten, spatial_shapes, level_start_index = \
+            prepare_encoder_input(srcs, masks, pos_embeds, self.level_embed)
+
+        valid_ratios = torch.stack([get_valid_ratio(m) for m in masks], 1)
+
+        memory = self.encoder(
+            src_flatten,
+            spatial_shapes,
+            level_start_index,
+            valid_ratios,
+            pos=pos_flatten,
+            padding_mask=mask_flatten
+        )
+
         query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
-        mask = mask.flatten(1)
-
         tgt = torch.zeros_like(query_embed)
-        memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
-        hs, references = self.decoder(tgt, memory, memory_key_padding_mask=mask,
-                          pos=pos_embed, query_pos=query_embed)
+
+        hs, references = self.decoder(
+            tgt,
+            memory.transpose(0, 1),
+            memory_key_padding_mask=mask_flatten,
+            pos=pos_flatten.transpose(0, 1),
+            query_pos=query_embed
+        )
+
         return hs, references
+
+
+
+class DeformableTransformerEncoderLayer(nn.Module):
+    def __init__(self,
+                 d_model=512, d_ffn=1024,
+                 dropout=0.1, activation="relu",
+                 n_levels=4, n_heads=8, n_points=4):
+        super().__init__()
+
+        # self attention
+        self.self_attn = MSDeformAttn(d_model, n_levels, n_heads, n_points)
+        self.dropout1 = nn.Dropout(dropout)
+        self.norm1 = nn.LayerNorm(d_model)
+
+        # ffn
+        self.linear1 = nn.Linear(d_model, d_ffn)
+        self.activation = _get_activation_fn(activation)
+        self.dropout2 = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(d_ffn, d_model)
+        self.dropout3 = nn.Dropout(dropout)
+        self.norm2 = nn.LayerNorm(d_model)
+
+    @staticmethod
+    def with_pos_embed(tensor, pos):
+        return tensor if pos is None else tensor + pos
+
+    def forward_ffn(self, src):
+        src2 = self.linear2(self.dropout2(self.activation(self.linear1(src))))
+        src = src + self.dropout3(src2)
+        src = self.norm2(src)
+        return src
+
+    def forward(self, src, pos, reference_points, spatial_shapes, level_start_index, padding_mask=None):
+        # self attention
+        src2 = self.self_attn(self.with_pos_embed(src, pos), reference_points, src, spatial_shapes, level_start_index, padding_mask)
+        src = src + self.dropout1(src2)
+        src = self.norm1(src)
+
+        # ffn
+        src = self.forward_ffn(src)
+
+        return src
+
+
+class DeformableTransformerEncoder(nn.Module):
+    def __init__(self, encoder_layer, num_layers):
+        super().__init__()
+        self.layers = _get_clones(encoder_layer, num_layers)
+        self.num_layers = num_layers
+
+    @staticmethod
+    def get_reference_points(spatial_shapes, valid_ratios, device):
+        reference_points_list = []
+        for lvl, (H_, W_) in enumerate(spatial_shapes):
+
+            ref_y, ref_x = torch.meshgrid(torch.linspace(0.5, H_ - 0.5, H_, dtype=torch.float32, device=device),
+                                          torch.linspace(0.5, W_ - 0.5, W_, dtype=torch.float32, device=device))
+            ref_y = ref_y.reshape(-1)[None] / (valid_ratios[:, None, lvl, 1] * H_)
+            ref_x = ref_x.reshape(-1)[None] / (valid_ratios[:, None, lvl, 0] * W_)
+            ref = torch.stack((ref_x, ref_y), -1)
+            reference_points_list.append(ref)
+        reference_points = torch.cat(reference_points_list, 1)
+        reference_points = reference_points[:, :, None] * valid_ratios[:, None]
+        return reference_points
+
+    def forward(self, src, spatial_shapes, level_start_index, valid_ratios, pos=None, padding_mask=None):
+        output = src
+        reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device=src.device)
+        for _, layer in enumerate(self.layers):
+            output = layer(output, pos, reference_points, spatial_shapes, level_start_index, padding_mask)
+
+        return output
+
+
 
 
 class TransformerEncoder(nn.Module):
@@ -407,6 +538,7 @@ def build_transformer(args):
         num_decoder_layers=args.dec_layers,
         normalize_before=args.pre_norm,
         return_intermediate_dec=True,
+        num_feature_levels=4,
     )
 
 

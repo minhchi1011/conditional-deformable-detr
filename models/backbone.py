@@ -64,18 +64,21 @@ class FrozenBatchNorm2d(torch.nn.Module):
 
 
 class BackboneBase(nn.Module):
-
-    def __init__(self, backbone: nn.Module, train_backbone: bool, num_channels: int, return_interm_layers: bool):
+    def __init__(self, backbone: nn.Module, train_backbone: bool, return_interm_layers: bool):
         super().__init__()
         for name, parameter in backbone.named_parameters():
-            if not train_backbone or 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
+            if not train_backbone or 'layer1' not in name and 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
                 parameter.requires_grad_(False)
+
         if return_interm_layers:
-            return_layers = {"layer1": "0", "layer2": "1", "layer3": "2", "layer4": "3"}
+            
+            self.return_layers = {"layer1": "0", "layer2": "1", "layer3": "2", "layer4": "3"}
+            self.num_channels = [256, 512, 1024, 2048]
         else:
-            return_layers = {'layer4': "0"}
-        self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
-        self.num_channels = num_channels
+            self.return_layers = {"layer4": "0"}
+            self.num_channels = [2048]
+
+        self.body = IntermediateLayerGetter(backbone, return_layers=self.return_layers)
 
     def forward(self, tensor_list: NestedTensor):
         xs = self.body(tensor_list.tensors)
@@ -88,40 +91,34 @@ class BackboneBase(nn.Module):
         return out
 
 
+
 class Backbone(BackboneBase):
-    """ResNet backbone with frozen BatchNorm."""
-    def __init__(self, name: str,
-                 train_backbone: bool,
-                 return_interm_layers: bool,
-                 dilation: bool):
+    def __init__(self, name: str, train_backbone: bool, return_interm_layers: bool, dilation: bool):
         backbone = getattr(torchvision.models, name)(
             replace_stride_with_dilation=[False, False, dilation],
             pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d)
-        num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
-        super().__init__(backbone, train_backbone, num_channels, return_interm_layers)
 
+        super().__init__(backbone, train_backbone, return_interm_layers)
 
 class Joiner(nn.Sequential):
     def __init__(self, backbone, position_embedding):
         super().__init__(backbone, position_embedding)
+        self.num_channels = backbone.num_channels
 
     def forward(self, tensor_list: NestedTensor):
         xs = self[0](tensor_list)
         out: List[NestedTensor] = []
         pos = []
-        for name, x in xs.items():
+        for x in xs.values():
             out.append(x)
-            # position encoding
             pos.append(self[1](x).to(x.tensors.dtype))
-
         return out, pos
 
 
 def build_backbone(args):
     position_embedding = build_position_encoding(args)
     train_backbone = args.lr_backbone > 0
-    return_interm_layers = args.masks
+    return_interm_layers = args.masks or (args.num_feature_levels > 1)
     backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation)
     model = Joiner(backbone, position_embedding)
-    model.num_channels = backbone.num_channels
     return model

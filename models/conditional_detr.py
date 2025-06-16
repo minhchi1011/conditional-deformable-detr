@@ -46,7 +46,13 @@ class ConditionalDETR(nn.Module):
         self.class_embed = nn.Linear(hidden_dim, num_classes)
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
-        self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
+        self.input_proj = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(backbone.num_channels[i], hidden_dim, kernel_size=1),
+                nn.GroupNorm(32, hidden_dim),
+            )
+            for i in range(transformer.num_feature_levels)
+        ])
         self.backbone = backbone
         self.aux_loss = aux_loss
 
@@ -77,11 +83,22 @@ class ConditionalDETR(nn.Module):
         if isinstance(samples, (list, torch.Tensor)):
             samples = nested_tensor_from_tensor_list(samples)
         features, pos = self.backbone(samples)
+        assert len(features) >= len(self.input_proj), \
+        f"Expected at least {len(self.input_proj)} feature levels from backbone, but got {len(features)}"
 
-        src, mask = features[-1].decompose()
-        assert mask is not None
-        hs, reference = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])
-        
+        srcs = []
+        masks = []
+        poses = []
+        for l, feat in enumerate(features):
+            src, mask = feat.decompose()
+            assert mask is not None
+            srcs.append(self.input_proj[l](src))  # input_proj là ModuleList
+            masks.append(mask)
+            poses.append(pos[l])
+
+        #  Forward qua transformer
+        hs, reference = self.transformer(srcs, masks, poses, self.query_embed.weight)
+        decoder_output = hs
         reference_before_sigmoid = inverse_sigmoid(reference)
         outputs_coords = []
         for lvl in range(hs.shape[0]):
