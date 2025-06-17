@@ -532,7 +532,6 @@ def build_transformer(args):
         d_model=args.hidden_dim,
         dropout=args.dropout,
         nhead=args.nheads,
-        num_queries=args.num_queries,
         dim_feedforward=args.dim_feedforward,
         num_encoder_layers=args.enc_layers,
         num_decoder_layers=args.dec_layers,
