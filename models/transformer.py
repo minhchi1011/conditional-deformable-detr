@@ -537,7 +537,7 @@ def build_transformer(args):
         num_decoder_layers=args.dec_layers,
         normalize_before=args.pre_norm,
         return_intermediate_dec=True,
-        num_feature_levels=4,
+        num_feature_levels=3,
     )
 
 

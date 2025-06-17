@@ -56,6 +56,10 @@ def get_args_parser():
                         help="Intermediate size of the feedforward layers in the transformer blocks")
     parser.add_argument('--hidden_dim', default=256, type=int,
                         help="Size of the embeddings (dimension of the transformer)")
+    
+    parser.add_argument('--num_feature_levels', default=3, type=int,
+                    help="Number of feature levels from the backbone (usually 1 or 4)")
+
     parser.add_argument('--dropout', default=0.1, type=float,
                         help="Dropout applied in the transformer")
     parser.add_argument('--nheads', default=8, type=int,
