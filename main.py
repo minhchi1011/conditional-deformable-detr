@@ -57,7 +57,7 @@ def get_args_parser():
     parser.add_argument('--hidden_dim', default=256, type=int,
                         help="Size of the embeddings (dimension of the transformer)")
     
-    parser.add_argument('--num_feature_levels', default=3, type=int,
+    parser.add_argument('--num_feature_levels', default=4, type=int,
                     help="Number of feature levels from the backbone (usually 1 or 4)")
 
     parser.add_argument('--dropout', default=0.1, type=float,
