@@ -71,8 +71,8 @@ class BackboneBase(nn.Module):
                 parameter.requires_grad_(False)
 
         if return_interm_layers:
-            self.return_layers = {"layer1": "0", "layer2": "1", "layer3": "2", "layer4": "3"}
-            self.num_channels = [256, 512, 1024, 2048]
+            self.return_layers = {"layer2": "0", "layer3": "1", "layer4": "2"}
+            self.num_channels = [512, 1024, 2048]
 
         else:
             self.return_layers = {"layer4": "0"}
