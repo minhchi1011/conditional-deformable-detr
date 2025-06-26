@@ -90,7 +90,7 @@ class Transformer(nn.Module):
         decoder_norm = nn.LayerNorm(d_model)
 
         self.decoder = TransformerDecoder(decoder_layer, num_decoder_layers, decoder_norm,
-                                          return_intermediate=return_intermediate_dec, d_model=d_model)
+                                          return_intermediate=return_intermediate_dec, d_model=d_model, num_feature_levels=self.num_feature_levels)
 
         self.level_embed = nn.Parameter(torch.Tensor(self.num_feature_levels, d_model))
         self._reset_parameters()
@@ -243,7 +243,7 @@ class TransformerEncoder(nn.Module):
 
 class TransformerDecoder(nn.Module):
 
-    def __init__(self, decoder_layer, num_layers, norm=None, return_intermediate=False, d_model=256):
+    def __init__(self, decoder_layer, num_layers, norm=None, return_intermediate=False, d_model=256, num_feature_levels=3):
         super().__init__()
         self.layers = _get_clones(decoder_layer, num_layers)
         self.num_layers = num_layers
@@ -251,6 +251,7 @@ class TransformerDecoder(nn.Module):
         self.return_intermediate = return_intermediate
         self.query_scale = MLP(d_model, d_model, d_model, 2)
         self.ref_point_head = MLP(d_model, d_model, 2, 2)
+        self.num_feature_levels = num_feature_levels
         for layer_id in range(num_layers - 1):
             self.layers[layer_id + 1].ca_qpos_proj = None
 
