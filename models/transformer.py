@@ -62,7 +62,7 @@ def gen_sineembed_for_position(pos_tensor):
     scale = 2 * math.pi
     if pos_tensor.dim() == 4:
         bs, num_queries, num_levels, _ = pos_tensor.shape
-        pos_tensor = pos_tensor.view(bs, num_queries * num_levels, -1)
+        pos_tensor =  pos_tensor.reshape(bs, num_queries * num_levels, -1)
         need_reshape_back = True
     else:
         need_reshape_back = False
