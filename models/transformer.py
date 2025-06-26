@@ -533,7 +533,10 @@ class TransformerDecoderLayer(nn.Module):
                 pos: Optional[Tensor] = None,
                 query_pos: Optional[Tensor] = None,
                 query_sine_embed = None,
-                is_first = False):
+                is_first = False,
+                reference_points=None,
+                spatial_shapes=None,
+                level_start_index=None):
         if self.normalize_before:
             raise NotImplementedError
             return self.forward_pre(tgt, memory, tgt_mask, memory_mask,
