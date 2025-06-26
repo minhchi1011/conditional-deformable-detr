@@ -269,7 +269,10 @@ class TransformerDecoder(nn.Module):
         intermediate = []
         reference_points_before_sigmoid = self.ref_point_head(query_pos)    # [num_queries, batch_size, 2]
         reference_points = reference_points_before_sigmoid.sigmoid().transpose(0, 1)
-
+        
+        reference_points = reference_points[:, :, None, :] * torch.ones(
+    1, 1, self.num_feature_levels, 1, device=reference_points.device
+)
         for layer_id, layer in enumerate(self.layers):
             obj_center = reference_points[..., :2].transpose(0, 1)      # [num_queries, batch_size, 2]
 
