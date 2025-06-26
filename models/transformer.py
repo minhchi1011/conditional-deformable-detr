@@ -275,7 +275,7 @@ class TransformerDecoder(nn.Module):
     1, 1, self.num_feature_levels, 1, device=reference_points.device
 )
         for layer_id, layer in enumerate(self.layers):
-            obj_center = reference_points[..., :2].transpose(0, 1)      # [num_queries, batch_size, 2]
+            obj_center = reference_points[..., :2]      # [num_queries, batch_size, 2]
 
             # For the first decoder layer, we do not apply transformation over p_s
             if layer_id == 0:
