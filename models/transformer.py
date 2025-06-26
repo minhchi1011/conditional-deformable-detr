@@ -486,12 +486,12 @@ class TransformerDecoderLayer(nn.Module):
         # k = torch.cat([k, k_pos], dim=3).view(hw, bs, n_model * 2)
 
         tgt2 = self.cross_attn(
-            query=tgt.transpose(0, 1),            # (bs, num_queries, d_model)
-            reference_points=reference_points,    # (bs, num_queries, num_levels, 2)
-            input_flatten=memory.transpose(0, 1), # (bs, total_keys, d_model)
-            spatial_shapes=spatial_shapes,        # (num_levels, 2)
-            level_start_index=level_start_index,  # (num_levels,)
-            key_padding_mask=memory_key_padding_mask
+            tgt.transpose(0, 1),           # query
+            reference_points,              # reference_points
+            memory.transpose(0, 1),        # input_flatten
+            spatial_shapes,                # spatial_shapes
+            level_start_index,             # level_start_index
+            memory_key_padding_mask        # key_padding_mask
         ).transpose(0, 1)                       # (num_queries, bs, d_model)              
         # ========== End of Cross-Attention =============
 
