@@ -100,7 +100,7 @@ class Transformer(nn.Module):
         decoder_norm = nn.LayerNorm(d_model)
 
         self.decoder = TransformerDecoder(decoder_layer, num_decoder_layers, decoder_norm,
-                                          return_intermediate=return_intermediate_dec, d_model=d_model, num_feature_levels=self.num_feature_levels)
+                                          return_intermediate=return_intermediate_dec, d_model=d_model)
 
         self.level_embed = nn.Parameter(torch.Tensor(self.num_feature_levels, d_model))
         self._reset_parameters()
@@ -263,7 +263,7 @@ class TransformerDecoder(nn.Module):
         self.ref_point_head = MLP(d_model, d_model, 2, 2)
         for layer_id in range(num_layers - 1):
             self.layers[layer_id + 1].ca_qpos_proj = None
-
+    
     def forward(self, tgt, memory,
                 tgt_mask: Optional[Tensor] = None,
                 memory_mask: Optional[Tensor] = None,
@@ -307,7 +307,6 @@ class TransformerDecoder(nn.Module):
 
         if self.return_intermediate:
             return [torch.stack(intermediate).transpose(1, 2), reference_points]
-
         return output.unsqueeze(0)
 
 
