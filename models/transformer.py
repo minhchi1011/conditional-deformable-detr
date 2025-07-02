@@ -143,10 +143,7 @@ class Transformer(nn.Module):
             memory.transpose(0, 1),
             memory_key_padding_mask=mask_flatten,
             pos=pos_flatten.transpose(0, 1),
-            query_pos=query_embed,
-            reference_points=None,  # vì bạn tạo trong decoder rồi nên để None
-            spatial_shapes=spatial_shapes,
-            level_start_index=level_start_index
+            query_pos=query_embed
         )
 
         return hs, references
